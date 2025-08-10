@@ -1,0 +1,106 @@
+Curent Workflow:
+
+
+Video Classification for Cashlifting Detection
+Overview
+This project aims to classify surveillance footage into two categories: Normal and Cashlifting. It is designed to help detect suspicious activities in real-time or from recorded clips. The dataset consists of video clips in .mp4 and .dav formats, which are processed for training a classification model.
+
+The implementation is done in Google Colab for accessibility and GPU acceleration.
+
+How It Works
+Step 1: Dataset Preparation
+Data Structure
+
+Normal Videos: Stored in /content/drive/MyDrive/clips/train/normal
+
+Cashlifting Videos: Stored in /content/cashlifting (originally .dav files, converted to .mp4 format).
+
+Conversion from .dav to .mp4
+The .dav format is a proprietary format used in many CCTV systems. We use OpenCV or FFmpeg to convert them into .mp4 for compatibility with standard processing pipelines.
+
+Step 2: Frame Extraction
+Videos are split into frames to create an image dataset.
+
+Each video is read frame-by-frame using OpenCV.
+
+Frames are resized to a fixed dimension (e.g., 224x224).
+
+Only a subset of frames (e.g., every nth frame) is used to reduce redundancy and storage requirements.
+
+Frames are stored in class-specific folders for model training.
+
+Step 3: Model Training Approaches
+Approach 1: Computer Vision Models
+Use pre-trained deep learning architectures such as ResNet, EfficientNet, or MobileNetV2.
+
+Fine-tune the models on the extracted frames.
+
+Pros:
+
+Higher accuracy when trained with sufficient data.
+
+Capable of learning complex spatial patterns.
+
+Cons:
+
+Requires significant computational resources.
+
+Longer training time.
+
+Approach 2: Processed Dataset with Frame Conversion
+Instead of streaming and processing the video during training, convert videos into preprocessed frames beforehand.
+
+Train models on these frames directly.
+
+Pros:
+
+Faster training.
+
+Less computationally intensive.
+
+Cons:
+
+Temporal context between frames is lost (model may misclassify if context is crucial).
+
+Step 4: Model Evaluation
+Data is split into Training, Validation, and Test sets.
+
+Accuracy, precision, recall, and F1-score are calculated.
+
+Confusion matrix is used to visualize classification performance.
+
+Step 5: Prediction on New Videos
+Read the first frame from the test video.
+
+Apply the same preprocessing used during training (resize, normalization).
+
+Load the trained model.
+
+Predict the class label and output confidence score.
+
+Example:
+
+python
+Copy
+Edit
+predicted_class = "Cashlifting"
+confidence = 0.87
+Requirements
+Python 3.8+
+
+OpenCV
+
+TensorFlow / PyTorch
+
+NumPy
+
+FFmpeg
+
+Limitations
+Accuracy depends heavily on the size and diversity of the dataset.
+
+Approach 1 (streaming model fine-tuning) requires powerful GPUs and large datasets for optimal results.
+
+Approach 2 (frame-based) loses temporal context, which may reduce detection accuracy in subtle cases.
+
+At least 75% accuracy can be achieved with moderate dataset sizes, but further improvement requires additional labeled data.

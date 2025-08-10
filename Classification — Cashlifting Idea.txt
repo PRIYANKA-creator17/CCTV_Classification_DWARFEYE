@@ -1,0 +1,277 @@
+Classification — Cashlifting Idea
+
+Purpose
+
+Detailed implementation and data-flow documentation for a cashlifting detection system using computer vision and ML. This document covers step-by-step pipelines, data relationships, recommended tooling (including Roboflow and AWS Bedrock), deployment considerations, and a requirements checklist.
+
+Sections
+
+Project summary
+
+High-level architecture
+
+Data preparation and relations
+
+Two principal approaches (object+tracking+rules and action recognition)
+
+Detailed step-by-step pipelines
+A. Object detection + tracking + rule engine (recommended for explainability)
+B. Action recognition (end-to-end temporal models)
+
+Roboflow integration for labeling and dataset management
+
+Using AWS Bedrock for model serving/LLM augmentation
+
+Evaluation metrics and validation strategy
+
+Deployment and monitoring
+
+Hardware, software, and dataset requirements
+
+Appendix: example file/folder layout and checkpoints
+
+Project summary
+
+Goal: Detect instances where a cashier pockets cash instead of placing it in the register ("cashlifting"). The system should detect the event, save a short clip (e.g., 10 seconds), log metadata, and optionally notify a manager.
+
+Key capabilities:
+
+Robust preprocessing for CCTV inputs (.dav, .mp4) with varied lighting and resolution
+
+Accurate detection of small objects (bills/notes), hands, persons and the register/drawer
+
+Temporal reasoning to decide whether money moved into pocket vs. drawer
+
+Real-time/near-real-time inference and alerting
+
+High-level architecture
+
+Components:
+
+Ingest: RTSP / file-based video input, conversion (.dav → .mp4)
+
+Preprocessing: frame extraction, resolution normalization, CLAHE/denoise, optical-flow optional
+
+Detection: YOLOv8 (or similar) for per-frame object detection (person, hand, money, drawer)
+
+Tracking: DeepSORT/ByteTrack to persist identities across frames
+
+Pose/Keypoints: MediaPipe/OpenPose for hand/torso localization (pocket approximation)
+
+Rule Engine / Classifier: trajectory analysis + temporal model (LSTM / Temporal CNN)
+
+Buffer & Clip Saver: circular buffer for pre/post event frames, save 10s clip on event
+
+Alerts & Logs: push notifications (Telegram/Slack/Email), store metadata in DB
+
+Evaluation: offline metrics (mAP, IDF1, precision/recall for events)
+
+Data preparation and relations
+
+Entities and relationships (logical):
+
+Video -> CameraId, Timestamp, Resolution, FPS
+
+Clip -> Parent Video, start_time, end_time, label (normal|cashlift)
+
+Frame -> Parent Clip, frame_index, detections (list of bounding boxes + class + confidence)
+
+Track -> track_id, person_id, timestamps, bbox sequence, keypoint sequence
+
+Event -> event_id, track_id(s), clip_path, confidence, rule_signature (why flagged), manager_review_status
+
+Data flow relations:
+
+Raw Video files are converted to normalized MP4s, and metadata is stored.
+
+Clips are sliced for training (labelled) and inference (stream sliding window).
+
+Frames from clips are passed through detection → produces per-frame detections.
+
+Tracker consumes detections and produces tracks; tracks join with pose/keypoints.
+
+Rule engine consumes track + pose + detection history → emits event (or not).
+
+Event triggers saving clip (buffer) and writing an Event record to DB and alerting.
+
+Two principal approaches
+
+A. Object Detection + Tracking + Rule Engine (recommended)
+
+Detect object classes (money, hand, person, drawer). Track them.
+
+Compute trajectories, disappearance from drawer, appearance near pocket zone.
+
+Rule engine (deterministic heuristics) or small classifier on features (trajectory vectors, speed, proximity, time delta).
+
+Pros: Explainable, actionable, lower data needs. Cons: Needs robust object detection for small items.
+
+B. Action Recognition / End-to-end video classification
+
+Convert videos to clips. Train 3D CNN (R3D, SlowFast, X3D) or transformer (TimesFormer) for binary classification.
+
+Pros: Less manual bounding-box labeling, captures subtle motion. Cons: Requires more labeled clips and compute; less interpretable.
+
+Detailed step-by-step pipelines
+
+Pipeline A — Object detection + Tracking + Rules
+
+Data ingestion & normalization
+
+Convert proprietary formats (.dav) to .mp4 using ffmpeg, store in raw bucket/folder.
+
+Normalize resolution and FPS (e.g., 1280x720, 15 FPS) for training and inference.
+
+Annotation
+
+Using Roboflow or CVAT label frames with classes: person, hand, money, drawer/register.
+
+Annotate pocket region if possible (or derive pocket as offset from torso bbox via keypoints).
+
+Export YOLO-format dataset.
+
+Train detector
+
+Fine-tune YOLOv8 (recommended small/medium model for faster iteration) on annotated frames.
+
+Evaluate mAP@0.5, per-class AP for money and hand.
+
+Tracker integration
+
+Use DeepSORT/ByteTrack to associate detections across frames; save per-track histories.
+
+Pose/keypoints
+
+Run MediaPipe/OpenPose per person frame to extract wrist/hip/shoulder keypoints (for pocket localization).
+
+Rule engine design
+
+Feature extraction per candidate event: money track trajectory, distance to drawer center, distance to pocket region, disappearance time, hand-to-chest movement angle, presence/absence of drawer open event.
+
+Heuristics: if money leaves drawer region and within T seconds appears overlapping pocket region of cashier person OR money held by person then pocket motion and no drawer deposit event -> suspicious.
+
+Optional learned model: small classifier (XGBoost/LightGBM) trained on feature vectors + labelled events.
+
+Buffer & alerting
+
+Maintain circular buffer (e.g., 15s) of decoded frames. On trigger, save clip (pre_event + post_event), write Event in DB, push alert.
+
+Logging & audit UI
+
+Store each event with metadata, bounding boxes, track ids, and clip path. Provide manager review flow.
+
+Pipeline B — Action recognition (Option C)
+
+Convert long videos into short clips (3–10s) and label clips as normal vs cashlifting.
+
+Preprocess: resize frames, consistent FPS, optionally compute optical flow for two-stream networks.
+
+Use pretrained video models (SlowFast, X3D, TimeSformer) and fine-tune on your clips.
+
+Sliding-window inference in production: slide 3–10s windows, classify, and trigger event when threshold crossed.
+
+Advantages: much simpler labeling (clip-level). Disadvantages: no localization, less interpretable.
+
+Roboflow integration for labeling and dataset management
+
+Why Roboflow
+
+Rapid annotation via web UI and team collaboration
+
+Augmentation and export pipelines to YOLOv5/YOLOv8, COCO, Pascal VOC
+
+Versioned datasets and easy train/test/validation splits
+
+Workflow with Roboflow
+
+Create a new project (object detection) and upload representative frames sampled from videos (include hard cases: low light, occlusion, small bills).
+
+Label classes: person, hand, money, drawer, optionally pocket_region.
+
+Use Roboflow augmentation (brightness, blur, scale, synthetic crops) to expand dataset.
+
+Export dataset in YOLOv8 format and download or connect via Roboflow API to Colab training pipeline.
+
+Note: For bounding small objects like money, prefer higher-resolution frames for annotation (e.g., 640–1280 px width) and crop around POS area if needed.
+
+Using AWS Bedrock for model serving/LLM augmentation
+
+AWS Bedrock provides access to foundation models and model orchestration (text, embeddings, and some multimodal capabilities). Use cases in this pipeline:
+
+Use Bedrock LLM (e.g., instruct-tuned models) to automatically summarize event logs for managers (textual explanation of flagged events).
+
+Use Bedrock embeddings to index and search events (semantic search) in a vector DB for further analysis.
+
+Optionally, host a classification or small model in SageMaker/EC2 and use Bedrock for orchestration and prompt-engineered analysis.
+
+Example Bedrock integration points
+
+After event detection, send event metadata to Bedrock to generate a short human-friendly incident summary: time, camera, confidence, recommended next steps.
+
+Use Bedrock to parse manager feedback on events and label training data (human-in-loop labeling): manager says "false positive"; store as negative example.
+
+Notes on production serving
+
+For heavy inference (real-time camera), host the CV models on GPU-enabled EC2 or ECS with NVIDIA GPUs (or use AWS Inferentia/Trn1 if supported).
+
+Use AWS S3 for storing clips and metadata, DynamoDB/RDS for event logs, and SNS/SQS for alerting.
+
+Evaluation metrics and validation strategy
+
+Per-component metrics
+
+Detection: mAP@0.5 (per-class AP for money, hand)
+
+Tracking: IDF1, MOTA, ID switches
+
+Event detection (end-to-end): Precision, Recall, F1, False Positive Rate per hour
+
+Validation strategy
+
+Hold-out camera / day split: train on some cameras/days and validate on others to measure generalization.
+
+Cross-validation across different lighting / camera angles.
+
+Create an event-level ground truth: annotated timestamps where theft happens.
+
+Deployment and monitoring
+
+Deployment components
+
+Inference service: REST or gRPC endpoint that accepts RTSP or video path and returns events.
+
+Edge devices: for on-premises inference (Jetson, Coral, or GPU-enabled NUC) to avoid network latency.
+
+Cloud: use ECS/EKS with GPU nodes for centralized processing.
+
+Monitoring
+
+Track per-camera throughput (FPS), GPU utilization, and end-to-end latency.
+
+Log FP and FN cases; provide an analyst UI for quick relabeling and retraining.
+
+Periodically retrain with new labeled events to reduce concept drift.
+
+Hardware, software, and dataset requirements
+
+Minimum (prototype)
+
+Colab/GPU or single GPU machine (e.g., NVIDIA T4), 16+ GB RAM
+
+Storage: 50 GB for video clips and models
+
+Software: Python 3.8+, PyTorch / TensorFlow, OpenCV, FFmpeg, Roboflow API client
+
+Production (recommended)
+
+Inference: GPU instances (e.g., g4dn, g5) or on-prem Jetson AGX Xavier / NVIDIA Jetson Orin for edge
+
+Storage: S3 for clips, RDS/DynamoDB for metadata
+
+Monitoring: CloudWatch, Prometheus
+
+Dataset size guidance
+
+For object-detection pipeline: 500+ labeled images with many examples of money in drawer and pocket contexts; augment aggressively
+
+For action-recognition pipeline: 200–1000 labeled clips per class
